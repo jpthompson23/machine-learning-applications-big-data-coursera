@@ -1,6 +1,9 @@
 from pyspark.ml.feature import VectorAssembler
+from pyspark.ml.feature import MinMaxScaler
+from pyspark.ml.feature import SQLTransformer
 from pyspark.ml.regression import LinearRegression
 from pyspark.ml.evaluation import RegressionEvaluator
+from pyspark.ml import Pipeline, PipelineModel
 from pyspark.sql import functions as f
 import pyspark
 
@@ -48,3 +51,65 @@ def run(spark_session: pyspark.sql.session.SparkSession):
     accs = res.select(f.when(f.col("diff") < 300, 1).otherwise(0).alias("is_accurate"))
     accs.limit(3).toPandas()
     accs.agg(f.mean("is_accurate").alias("accuracy")).toPandas()
+
+    # using MinMaxScaler to scale features:
+    scaler = MinMaxScaler(inputCol="features", outputCol="scaled_features")
+    scaler_model = scaler.fit(train02)
+    scaler_model.transform(train02)
+
+
+def construct_pipeline():
+    feature_columns = [
+        "season",
+        "yr",
+        "mnth",
+        "holiday",
+        "weekday",
+        "workingday",
+        "weathersit",
+        "temp",
+        "atemp",
+        "hum",
+        "windspeed"
+    ]
+
+    sql_transformer = SQLTransformer(statement="""
+        SELECT
+            cast(season as int),
+            cast(yr as int),
+            cast(mnth as int),
+            cast(holiday as int),
+            cast(weekday as int),
+            cast(workingday as int),
+            cast(weathersit as int),
+            cast(temp as double),
+            cast(atemp as double),
+            cast(hum as double),
+            cast(windspeed as double),
+            cast(cnt as int) as label
+        FROM __THIS__
+    """)
+
+    assembler = VectorAssembler().setInputCols(feature_columns[:-1]).setOutputCol("features")
+
+    feature_label_tf = SQLTransformer(statement="""
+        SELECT features, label
+        FROM __THIS__
+    """)
+
+    pipeline = Pipeline(stages=[
+        sql_transformer,
+        assembler,
+        feature_label_tf,
+        LinearRegression()
+    ])
+
+    return pipeline
+
+
+def save_pipeline_model(pipeline_model: PipelineModel, foldername: str):
+    pipeline_model.save(foldername)
+
+
+def load_pipeline_model(foldername: str):
+    return PipelineModel.load(foldername)
